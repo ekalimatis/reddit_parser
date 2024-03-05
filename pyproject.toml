@@ -1,0 +1,15 @@
+[tool.poetry]
+name = "reddit-parser"
+version = "0.1.0"
+description = ""
+authors = ["EKA <eka@limantis.com>"]
+readme = "README.md"
+packages = [{include = "reddit_parser"}]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
