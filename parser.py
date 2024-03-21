@@ -5,9 +5,10 @@ import json
 from collections import Counter
 from functools import wraps
 from collections.abc import Awaitable
+from queue import Queue, Empty
 
 from aiohttp import ClientSession
-from queue import Queue, Empty
+
 
 POST_INDEX: int = 0
 COMMENT_INDEX: int = 1
@@ -107,9 +108,9 @@ async def extract_posts_url_and_authors(page_json: dict) -> list[Awaitable]:
                 pages_json_queue.put(IS_END)
                 next_page = False
                 continue
-            else:
-                post_authors.append(post['data']['author'])
-                tasks.append(asyncio.create_task(get_page(create_post_url(post['data']['id']), posts_json_queue)))
+            post_authors.append(post['data']['author'])
+            tasks.append(asyncio.create_task(get_page(create_post_url(post['data']['id']), posts_json_queue)))
+
         if next_page:
             tasks.append(
                 asyncio.create_task(get_page(create_next_page_url(page_json['data']['after']), pages_json_queue)))
