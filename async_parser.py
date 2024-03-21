@@ -14,13 +14,11 @@ DAY_PER_SECONDS = 86400
 
 BASE_URL = "http://www.reddit.com/r"
 SUBREDDIT = "Python"
-read_depth_days = 1
+read_depth_days = 3
 date_from = datetime.datetime.utcnow().timestamp() - read_depth_days * DAY_PER_SECONDS
 TOP_N = 10
 
-pages_url_queue = Queue()
 pages_json_queue = Queue()
-posts_url_queue = Queue()
 posts_json_queue = Queue()
 
 post_authors = []
@@ -32,30 +30,27 @@ def main(*args):
     if len(args) > 1:
         SUBREDDIT = args[1]
     url = f'{BASE_URL}/{SUBREDDIT}.json?sort=new'
-    pages_url_queue.put(url)
-    asyncio.run(run())
+    asyncio.run(run(url))
 
 
-async def run():
-    tasks = [asyncio.create_task(coroutine()) for coroutine in (handle_page_url,
-                                                                extract_posts_url_and_authors,
-                                                                get_post_pages,
-                                                                get_comments)]
+async def run(url):
+    asyncio.create_task(get_page(url, pages_json_queue))
+    tasks = [asyncio.create_task(coroutine()) for coroutine in (extract_posts_url_and_authors,
+                                                                extract_comments)]
     await asyncio.gather(*tasks)
 
     print(Counter(post_authors).most_common()[:TOP_N])
     print(Counter(comment_authors).most_common()[:TOP_N])
-    print(len(comment_authors))
 
 
-async def get_page(page_url: str, resourse: Queue) -> json:
+async def get_page(page_url: str, destanation: Queue) -> json:
     page = await resolve_url(page_url)
     try:
         json_page = json.loads(page)
     except json.decoder.JSONDecodeError:
         print(page)
         return
-    resourse.put(json_page)
+    destanation.put(json_page)
 
 
 async def resolve_url(page_url: str) -> str:
@@ -69,8 +64,12 @@ def handle_queue(handling_queue: Queue):
     def handle_queue_decorator(func):
         async def wrapper():
             is_end = False
-            print(f'{func.__name__} START')
-            while not is_end:
+            tasks = []
+            pending_tasks = []
+
+            while not is_end or not handling_queue.empty() or not (len(pending_tasks) == 0):
+                if tasks:
+                    _, pending_tasks = await asyncio.wait(tasks, timeout=0)
 
                 try:
                     queue_element = handling_queue.get(block=False)
@@ -78,106 +77,75 @@ def handle_queue(handling_queue: Queue):
                     await asyncio.sleep(0)
                     continue
 
-                await func(queue_element)
-
                 if queue_element == IS_END:
+                    if tasks:
+                        await asyncio.wait(tasks)
                     is_end = True
+
+                tasks.extend(await func(queue_element))
 
                 handling_queue.task_done()
                 await asyncio.sleep(0)
 
-            print(f'{func.__name__} END')
         return wrapper
+
     return handle_queue_decorator
-
-
-@handle_queue(pages_url_queue)
-async def handle_page_url(page_url: str):
-    print(page_url)
-    if page_url != IS_END:
-        asyncio.create_task(get_page(page_url, pages_json_queue))
-    else:
-        pages_json_queue.put(IS_END)
 
 
 @handle_queue(pages_json_queue)
 async def extract_posts_url_and_authors(page_json):
+    tasks = []
+    next_page = True
+
     if page_json != IS_END:
         for post in page_json['data']['children']:
             created = post['data']['created']
             if created < date_from:
-                pages_url_queue.put(IS_END)
+                pages_json_queue.put(IS_END)
+                next_page = False
                 continue
             else:
                 post_authors.append(post['data']['author'])
-                posts_url_queue.put(create_post_url(post['data']['id']))
-        else:
-            pages_url_queue.put(create_next_page_url(page_json['data']['after']))
+                tasks.append(asyncio.create_task(get_page(create_post_url(post['data']['id']), posts_json_queue)))
+        if next_page:
+            tasks.append(
+                asyncio.create_task(get_page(create_next_page_url(page_json['data']['after']), pages_json_queue)))
     else:
-        posts_url_queue.put(IS_END)
+        posts_json_queue.put(IS_END)
+
+    return tasks
 
 
-async def get_post_pages() -> None:
-    is_end = False
+@handle_queue(posts_json_queue)
+async def extract_comments(post_json):
     tasks = []
-    while not is_end:
-        try:
-            post_url = posts_url_queue.get(block=False)
-        except Empty:
-            await asyncio.sleep(0)
-            continue
 
-        if post_url != IS_END:
-            tasks.append(asyncio.create_task(get_page(post_url, posts_json_queue)))
-        else:
-            if tasks:
-                done, pending = await asyncio.wait(tasks)
-            is_end = True
-            posts_json_queue.put(IS_END)
+    if post_json != IS_END:
+        post_id = post_json[POST_INDEX]['data']['children'][POST_INDEX]['data']['id']
 
-        posts_url_queue.task_done()
-        await asyncio.sleep(0)
+        comments = parse_comments(post_json[COMMENT_INDEX]['data']['children'])
+
+        for comment in comments:
+            if comment['kind'] == 'more':
+                for comment_id in comment['data']['children']:
+                    tasks.append(asyncio.create_task(get_page(create_post_url(post_id, comment_id), posts_json_queue)))
+
+            if comment['kind'] == 't1':
+                comment_authors.append(comment['data']['author'])
+
+    return tasks
 
 
-async def get_comments():
-    is_end = False
-    tasks = []
-    pending = []
-    while not is_end or not posts_json_queue.empty() or (len(pending) > 0):
-        if tasks:
-            done, pending = await asyncio.wait(tasks, timeout=0)
-        try:
-            post = posts_json_queue.get(block=False)
-        except Empty:
-            await asyncio.sleep(0)
-            continue
-
-        if post != IS_END:
-            post_id = post[POST_INDEX]['data']['children'][POST_INDEX]['data']['id']
-
-            comments = parse_comment(post[COMMENT_INDEX]['data']['children'])
-
-            for comment in comments:
-                if comment['kind'] == 'more':
-                    for comment_id in comment['data']['children']:
-                        tasks.append(asyncio.create_task(get_page(create_post_url(post_id, comment_id), posts_json_queue)))
-
-                if comment['kind'] == 't1':
-                    comment_authors.append(comment['data']['author'])
-
-        else:
-            is_end = True
-
-        posts_json_queue.task_done()
-        await asyncio.sleep(0)
-
-
-def parse_comment(comments: dict) -> list[dict]:
+def parse_comments(comments: dict) -> list[dict]:
     list_of_comments = []
     for comment in comments:
         list_of_comments.append(comment)
-        if comment['data']['replies']:
-            list_of_comments.extend(parse_comment(comment['data']['replies']['data']['children']))
+        if comment['kind'] == 't1':
+            try:
+                if comment['data']['replies']:
+                    list_of_comments.extend(parse_comments(comment['data']['replies']['data']['children']))
+            except KeyError:
+                pass
 
     return list_of_comments
 
