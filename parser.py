@@ -17,7 +17,7 @@ DAY_PER_SECONDS: int = 86400
 
 BASE_URL: str = "http://www.reddit.com/r"
 SUBREDDIT: str = "Python"
-read_depth_days: int = 3
+read_depth_days: int = 1
 date_from: float = datetime.datetime.utcnow().timestamp() - read_depth_days * DAY_PER_SECONDS
 TOP_N: int = 10
 
@@ -32,7 +32,7 @@ def main(*args):
     global SUBREDDIT
     if len(args) > 1:
         SUBREDDIT = args[1]
-    url = f'{BASE_URL}/{SUBREDDIT}.json?sort=new'
+    url = create_page_url()
     asyncio.run(run(url))
 
 
@@ -113,7 +113,7 @@ async def extract_posts_url_and_authors(page_json: dict) -> list[Awaitable]:
 
         if next_page:
             tasks.append(
-                asyncio.create_task(get_page(create_next_page_url(page_json['data']['after']), pages_json_queue)))
+                asyncio.create_task(get_page(create_page_url(page_json['data']['after']), pages_json_queue)))
     else:
         posts_json_queue.put(IS_END)
 
@@ -151,8 +151,11 @@ def parse_comments(comments: dict) -> list[dict]:
     return list_of_comments
 
 
-def create_next_page_url(after: str) -> str:
-    return f'{BASE_URL}/{SUBREDDIT}.json?after={after}&sort=new'
+def create_page_url(after: str | None = None) -> str:
+    if after:
+        return f'{BASE_URL}/{SUBREDDIT}.json?after={after}&sort=new'
+
+    return f'{BASE_URL}/{SUBREDDIT}.json?sort=new'
 
 
 def create_post_url(post_id: str, comment_id: str | None = None) -> str:
