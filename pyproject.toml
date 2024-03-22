@@ -8,6 +8,9 @@ packages = [{include = "reddit_parser"}]
 
 [tool.poetry.dependencies]
 python = "^3.11"
+requests-async = "^0.6.2"
+http3 = "^0.6.7"
+aiohttp = "^3.9.3"
 
 
 [build-system]
